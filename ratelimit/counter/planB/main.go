@@ -45,15 +45,13 @@ func (limit *LimitRate) Allow() bool {
 			//(2.1)当前时间距离上次重置时的时间间隔大于或等于计数周期时需要重置计数器
 			if now.Sub(limit.begin) >= limit.cycle {
 				limit.Reset()
-				//(2.2)重置后需要将对该次请求计数
-				limit.count++
-				return true
+				break
 			}
 		}
-	} else {
-		limit.count++
-		return true
 	}
+	//(3)无论如何都需要计数器自增
+	limit.count++
+	return true
 }
 
 func main() {
@@ -64,12 +62,12 @@ func main() {
 		wg.Add(1)
 
 		//fmt.Println("Create req", i, time.Now())
-		go func() {
+		go func(i int) {
 			if limitEg.Allow() {
 				fmt.Println("Respon req", i, time.Now())
 			}
 			wg.Done()
-		}()
+		}(i)
 		time.Sleep(200 * time.Millisecond)
 	}
 	wg.Wait()

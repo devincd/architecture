@@ -56,7 +56,7 @@ func (limit *LimitRate) Allow() bool {
 
 func main() {
 	var limitEg LimitRate
-	limitEg.Create(2, time.Second)	// 1s内只允许三个请求通过
+	limitEg.Create(2, time.Second)	// 1s内只允许两个请求通过
 	wg := sync.WaitGroup{}
 	for i:=0; i<10; i++ {
 		wg.Add(1)
