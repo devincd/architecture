@@ -3,21 +3,21 @@
 在一段时间间隔内，对请求进行计数，与阈值进行判断是否需要限流，一旦到了时间临界点，将计数器清零
 
 planB: 当请求频率太快时,后续的请求等待之前的请求完成后才进行
- */
+*/
 package main
 
 import (
-	"time"
-	"sync"
 	"fmt"
+	"sync"
+	"time"
 )
 
 type LimitRate struct {
-	rate int  			//计数周期内最多允许的请求数 (可以等于)
-	begin time.Time		//计数开始时间
-	cycle time.Duration	//计数周期
-	count int 			//计数周期内累计收到的请求数
-	lock sync.Mutex
+	rate  int           //计数周期内最多允许的请求数 (可以等于)
+	begin time.Time     //计数开始时间
+	cycle time.Duration //计数周期
+	count int           //计数周期内累计收到的请求数
+	lock  sync.Mutex
 }
 
 func (limit *LimitRate) Create(r int, cycle time.Duration) {
@@ -37,8 +37,8 @@ func (limit *LimitRate) Allow() bool {
 	limit.lock.Lock()
 	defer limit.lock.Unlock()
 
-	//(2)计数的个数大于或等于计数周期内最多允许的请求数时,需要判断是否到达了计数周期
-	if limit.count >= limit.rate {
+	//(2)计数的个数(计数提前已经加过1)大于计数周期内最多允许的请求数时,需要判断是否到达了计数周期
+	if limit.count+1 > limit.rate {
 		//循环等待请求,避免将请求直接丢弃
 		for {
 			now := time.Now()
@@ -56,15 +56,15 @@ func (limit *LimitRate) Allow() bool {
 
 func main() {
 	var limitEg LimitRate
-	limitEg.Create(2, time.Second)	// 1s内只允许2个请求通过
+	limitEg.Create(2, time.Second) // 1s内只允许2个请求通过
 	wg := sync.WaitGroup{}
-	for i:=0; i<10; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 
 		//fmt.Println("Create req", i, time.Now())
 		go func(i int) {
 			if limitEg.Allow() {
-				fmt.Println("Respon req", i, time.Now())
+				fmt.Println("Reponse req", i, time.Now())
 			}
 			wg.Done()
 		}(i)
@@ -72,5 +72,3 @@ func main() {
 	}
 	wg.Wait()
 }
-
-
