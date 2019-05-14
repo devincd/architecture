@@ -9,7 +9,7 @@
 - 漏桶算法
 - 令牌桶算法
 
-### 计数器
+### 1.计数器
 计数器是一种比较简单粗暴的限流算法：
 >在一段时间间隔内，对请求进行计数，与阈值进行比较判断是否需要限流，一旦到了时间临界点，将计数器清零
 以下讨论两种通用做法:
@@ -145,13 +145,14 @@ sys     0m0.271s
 ```
 计数器算法存在**时间临界点**缺陷。比如每一分钟限速100个请求（也就是每秒最多1.7个请求），在00:00:00到00:00:58这段时间内没有任何用户请求，然后在00:00:59这一瞬时发出了100个请求，这是允许的，然后在00:01:00这一瞬时又发出了100个请求，短短1s内发出了200个请求，系统可能会承受恶意用户的大量请求，甚至击穿系统
 
-### 滑动窗口
+
+### 2.滑动窗口
 针对计数器存在的临界点缺陷
 >滑动窗口把固定时间片进行划分，并且随着时间的流逝，进行移动，固定数量的可以移动的格子，进行计数并判断阈值
 
 格子的数量影响着滑动窗口算法的精度，依然后时间片的概念，无法根本解决临界点的问题
 
-### 漏桶算法
+### 3.漏桶算法
 漏桶算法描述如下:
 - 一个固定容量的漏桶，按照固定速率流出水滴
 - 如果桶是空的，则不需要流出水滴
@@ -187,7 +188,6 @@ func (leaky *LeakyBucket) Create(rate float64, capacity float64) {
 	leaky.rate = rate
 	leaky.capacity = capacity
 	leaky.water = 0
-	// int64 / float64
 	leaky.lastLeakyMs = time.Now().UnixNano() / 1e6
 }
 
@@ -253,7 +253,7 @@ Reponse req 29 2019-05-13 14:03:09.240306 +0800 CST m=+3.024067248
 ```
 
 
-### 令牌桶算法
+### 4.令牌桶算法
 由于漏桶出水速度时恒定的，如果瞬时爆发大流量的话，将有大部分请求被丢弃掉（溢出）。为了解决这个问题，产生了令牌桶算法。令牌桶算法描述如下：
 - 有一个固定容量的桶，桶一开始是空的
 - 以固定的速率**r**往tong桶里填充**token**，直到达到桶的容量，多余的令牌将会丢弃
@@ -261,6 +261,105 @@ Reponse req 29 2019-05-13 14:03:09.240306 +0800 CST m=+3.024067248
 
 ![token-bucket.jpg](./image/token-bucket.jpg)
 
+```golang
+/**
+令牌桶算法的原理是系统会以一个恒定的速度往桶里放入令牌，而如果请求需要处理，则需要先从桶里获取一个令牌，当桶里没有令牌可取时，则拒绝服务
+*/
+package main
+
+import (
+	"fmt"
+	"math"
+	"sync"
+	"time"
+)
+
+type TokenBucket struct {
+	rate         int64   //固定的token放入速率 r/s
+	capacity     float64 //桶的容量
+	tokens       float64 //桶中当前token数量
+	lastTokenSec int64   //桶上次放token的时间戳 ms
+
+	lock sync.Mutex
+}
+
+func (token *TokenBucket) Create(rate int64, capacity float64) {
+	token.rate = rate
+	token.capacity = capacity
+	token.lastTokenSec = time.Now().UnixNano() / 1e6
+
+	//(1)初始化桶中token数量为桶的容量
+	token.tokens = capacity
+
+	//(2)异步往桶中添加令牌，令牌的数量最大值是桶的容量
+	go func() {
+		for {
+			token.lock.Lock()
+			now := time.Now().UnixNano() / 1e6
+			//(2.1)先往桶中添加令牌
+			token.tokens = token.tokens + float64((now-token.lastTokenSec)*token.rate)/1e3
+			token.tokens = math.Min(token.capacity, token.tokens)
+			token.lastTokenSec = now
+			token.lock.Unlock()
+			//(2.2)sleep一段时间再执行添加令牌的操作
+			time.Sleep(time.Duration(1e3/rate) * time.Millisecond)
+		}
+	}()
+}
+
+func (token *TokenBucket) Allow() bool {
+	//fmt.Println(token.tokens)
+	//没有令牌，拒绝服务
+	if token.tokens-1 < 0 {
+		return false
+	} else {
+		token.tokens--
+		return true
+	}
+}
+
+func main() {
+	var wg sync.WaitGroup
+	var lr TokenBucket
+	lr.Create(3, 3) //每秒访问速率限制为3个请求，桶容量为3
+
+	time.Sleep(time.Second)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+
+		//fmt.Println("Create req", i, time.Now())
+		go func(i int) {
+			if lr.Allow() {
+				fmt.Println("Reponse req", i, time.Now())
+			}
+			wg.Done()
+		}(i)
+
+		time.Sleep(200 * time.Millisecond)
+	}
+	wg.Wait()
+}
+
+```
+这里初始化桶容量为3个单位，桶中有3个令牌。之后每1s产生3个令牌。而后每1s创建5个请求，获取访问令牌:
+```
+Reponse req 0 2019-05-14 09:45:53.206753 +0800 CST m=+1.004942379
+Reponse req 1 2019-05-14 09:45:53.410787 +0800 CST m=+1.208975784
+Reponse req 2 2019-05-14 09:45:53.61233 +0800 CST m=+1.410518861
+Reponse req 4 2019-05-14 09:45:54.016357 +0800 CST m=+1.814546215
+Reponse req 5 2019-05-14 09:45:54.217979 +0800 CST m=+2.016167618
+Reponse req 6 2019-05-14 09:45:54.420447 +0800 CST m=+2.218636480
+Reponse req 7 2019-05-14 09:45:54.62422 +0800 CST m=+2.422409147
+Reponse req 9 2019-05-14 09:45:55.030849 +0800 CST m=+2.829119469
+Reponse req 10 2019-05-14 09:45:55.233087 +0800 CST m=+3.031357120
+Reponse req 12 2019-05-14 09:45:55.634021 +0800 CST m=+3.432291464
+Reponse req 14 2019-05-14 09:45:56.0416 +0800 CST m=+3.839869647
+Reponse req 15 2019-05-14 09:45:56.24494 +0800 CST m=+4.043210132
+Reponse req 17 2019-05-14 09:45:56.653759 +0800 CST m=+4.452028760
+Reponse req 19 2019-05-14 09:45:57.057464 +0800 CST m=+4.855814172
+
+```
+由于桶中可以储备令牌，这使得令牌桶算法支持一定程度突发的大流量并发访问，也就是说，假设桶内有100个token时，那么可以瞬间允许100个请求通过。
 
 
 ### 漏桶算法和令牌桶算法对比
@@ -270,3 +369,98 @@ Reponse req 29 2019-05-13 14:03:09.240306 +0800 CST m=+3.024067248
 - 漏桶限制的是常量流出速率（即流出速率是一个固定常量值，比如都是1的速率流出，而不能一次是1，下次是2），从而平滑突发流入速率
 - 令牌桶允许一定程度的突发，而漏桶主要目的是平滑流入速率
 - 两个算法实现可以一样，但是方向是相反的，对于相同的参数得到的限流效果是一样的
+
+
+### 5.golang原生rate包
+Go语言中的**golang.org/x/time/rate**包采用了ling'pai'ton令牌桶算法来实现速率限制
+
+#### rate包的简单介绍
+
+#### 用法示例
+```
+package main
+
+import (
+	"net/http"
+	"time"
+
+	"golang.org/x/time/rate"
+)
+
+var (
+	limiter = rate.NewLimiter(2, 5)
+)
+
+func limit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !limiter.Allow() {
+			http.Error(w, http.StatusText(http.StatusTooManyRequests)+"; time="+time.Now().Format("2006-01-02 15:04:05.000"), http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func okHandler(w http.ResponseWriter, r *http.Request) {
+	_, _ = w.Write([]byte("OK; time=" + time.Now().Format("2006-01-02 15:04:05.000") + "\n"))
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", okHandler)
+	_ = http.ListenAndServe(":4000", limit(mux))
+}
+
+```
+测试结果
+```
+while true; do  curl http://localhost:4000/; sleep 0.1s; done;
+
+OK; time=2019-05-14 10:35:51.782
+OK; time=2019-05-14 10:35:51.913
+OK; time=2019-05-14 10:35:52.031
+OK; time=2019-05-14 10:35:52.154
+OK; time=2019-05-14 10:35:52.276
+OK; time=2019-05-14 10:35:52.397
+Too Many Requests; time=2019-05-14 10:35:52.517
+Too Many Requests; time=2019-05-14 10:35:52.639
+Too Many Requests; time=2019-05-14 10:35:52.760
+OK; time=2019-05-14 10:35:52.881
+Too Many Requests; time=2019-05-14 10:35:53.001
+Too Many Requests; time=2019-05-14 10:35:53.121
+Too Many Requests; time=2019-05-14 10:35:53.241
+OK; time=2019-05-14 10:35:53.360
+Too Many Requests; time=2019-05-14 10:35:53.478
+Too Many Requests; time=2019-05-14 10:35:53.600
+Too Many Requests; time=2019-05-14 10:35:53.719
+OK; time=2019-05-14 10:35:53.840
+Too Many Requests; time=2019-05-14 10:35:53.972
+Too Many Requests; time=2019-05-14 10:35:54.095
+Too Many Requests; time=2019-05-14 10:35:54.211
+OK; time=2019-05-14 10:35:54.331
+Too Many Requests; time=2019-05-14 10:35:54.449
+Too Many Requests; time=2019-05-14 10:35:54.569
+Too Many Requests; time=2019-05-14 10:35:54.687
+OK; time=2019-05-14 10:35:54.808
+Too Many Requests; time=2019-05-14 10:35:54.928
+Too Many Requests; time=2019-05-14 10:35:55.050
+Too Many Requests; time=2019-05-14 10:35:55.172
+OK; time=2019-05-14 10:35:55.290
+Too Many Requests; time=2019-05-14 10:35:55.409
+Too Many Requests; time=2019-05-14 10:35:55.525
+Too Many Requests; time=2019-05-14 10:35:55.644
+Too Many Requests; time=2019-05-14 10:35:55.767
+OK; time=2019-05-14 10:35:55.889
+Too Many Requests; time=2019-05-14 10:35:56.009
+Too Many Requests; time=2019-05-14 10:35:56.125
+Too Many Requests; time=2019-05-14 10:35:56.248
+OK; time=2019-05-14 10:35:56.368
+Too Many Requests; time=2019-05-14 10:35:56.488
+Too Many Requests; time=2019-05-14 10:35:56.609
+Too Many Requests; time=2019-05-14 10:35:56.726
+```
+后续的请求每秒中只有2个请求让通过
+
+
+### 参考文献
+- https://hxzqlh.com/2018/09/12/go-rate-limit/
