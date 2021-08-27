@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"time"
 
@@ -28,5 +29,6 @@ func okHandler(w http.ResponseWriter, r *http.Request) {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", okHandler)
-	_ = http.ListenAndServe(":4000", limit(mux))
+	err:= http.ListenAndServe(":3000", limit(mux))
+	log.Println(err)
 }

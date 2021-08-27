@@ -19,33 +19,38 @@ type LeakyBucket struct {
 	lock sync.Mutex
 }
 
-func (leaky *LeakyBucket) Create(rate float64, capacity float64) {
-	leaky.rate = rate
-	leaky.capacity = capacity
-	leaky.water = 0
-	// int64 / float64
-	leaky.lastLeakyMs = time.Now().UnixNano() / 1e6
+func (lb *LeakyBucket) Create(rate float64, capacity float64) {
+	lb.rate = rate
+	lb.capacity = capacity
+	lb.water = 0
+	lb.lastLeakyMs = time.Now().UnixNano() / 1e6
+
+	//(2)异步执行漏水的操作
+	go func() {
+		for {
+			lb.lock.Lock()
+			now := time.Now().UnixNano() / 1e6 //ms
+			expand := float64(now - lb.lastLeakyMs) / 1000 *  lb.rate
+			//(2.1)计算剩余水量,需要判断桶是否已经干了
+			lb.water = lb.water - expand
+			lb.water = math.Max(0, lb.water)
+			lb.lastLeakyMs = now
+			lb.lock.Unlock()
+			//(2.2)sleep一段时间再执行漏水操作
+			time.Sleep(time.Duration(1e3/rate) * time.Millisecond)
+		}
+	}()
 }
 
-func (Leaky *LeakyBucket) Allow() bool {
-	Leaky.lock.Lock()
-	defer Leaky.lock.Unlock()
+func (lb *LeakyBucket) Allow() bool {
+	lb.lock.Lock()
+	defer lb.lock.Unlock()
 
-	//(1)先执行漏水的操作
-	now := time.Now().UnixNano() / 1e6 //ms
-	expand := float64((now - Leaky.lastLeakyMs)) * Leaky.rate / 1000
-	//(2)计算剩余水量,需要判断桶是否已经干了
-	Leaky.water = Leaky.water - expand
-	Leaky.water = math.Max(0, Leaky.water)
-
-	Leaky.lastLeakyMs = now
-
-	//fmt.Println(Leaky.water)
-	//(3)如果新加的水量之后桶中当前水量大于桶的容量表示水满执行溢出操作,反之执行添加水操作
-	if Leaky.water+1 > Leaky.capacity {
+	// 如果新加的水量之后桶中当前水量大于桶的容量表示水满执行溢出操作
+	if lb.water+1 > lb.capacity {
 		return false
 	} else {
-		Leaky.water++
+		lb.water++
 		return true
 	}
 }
@@ -56,13 +61,12 @@ func main() {
 
 	wg := sync.WaitGroup{}
 
-	for i := 0; i < 30; i++ {
+	for i := 1; i <= 40; i++ {
 		wg.Add(1)
 
-		//fmt.Println("Create req", i, time.Now())
 		go func(i int) {
 			if leaky.Allow() {
-				fmt.Println("Reponse req", i, time.Now())
+				fmt.Println("Response req", i, time.Now())
 			}
 			wg.Done()
 		}(i)

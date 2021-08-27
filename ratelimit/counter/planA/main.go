@@ -1,6 +1,6 @@
 /**
 限流方式-计数器
-在一段时间间隔内，对请求进行计数，与阈值进行判断是否需要限流，一旦到了时间临界点，将计数器清零
+在一段时间间隔内，对请求进行计数，与阈值进行判断是否需要限流，一旦到了时间临界点，将计数器清零。
 
 planA: 当请求频率过快时,直接抛弃后续请求
 */
@@ -55,21 +55,19 @@ func (limit *LimitRate) Allow() bool {
 }
 
 func main() {
-	var limitEg LimitRate
-	limitEg.Create(2, time.Second) // 1s内只允许两个请求通过
+	var limiter LimitRate
+	limiter.Create(2, time.Second) // 1s内只允许两个请求通过
 	wg := sync.WaitGroup{}
-	for i := 0; i < 10; i++ {
+	// 模拟在 2s 内发送20个请求，正常情况下有4个请求通过
+	for i := 1; i <= 20; i++ {
 		wg.Add(1)
-
-		//fmt.Println("Create req", i, time.Now())
 		go func(i int) {
-			if limitEg.Allow() {
-				fmt.Println("Reponse req", i, time.Now())
+			if limiter.Allow() {
+				fmt.Println("Response req", i, time.Now())
 			}
 			wg.Done()
 		}(i)
-		// Sleep 200ms.  10个请求需要耗时2s
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	wg.Wait()
 }
